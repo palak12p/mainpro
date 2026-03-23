@@ -107,6 +107,7 @@
             <div>
               <p class="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">WhatsApp-style Academic Chat</p>
               <h2 class="mt-1 text-2xl font-bold text-nmitInk">Ask the assistant</h2>
+              <p class="mt-2 inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-blue-800">Agentic AI Mode</p>
             </div>
             <div class="flex flex-wrap items-end gap-3">
               <div>
@@ -167,6 +168,13 @@
           <div id="promptPanel" class="mt-4 flex flex-wrap gap-2"></div>
         </div>
 
+        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
+          <h2 class="text-lg font-bold text-nmitInk">Agent Trace</h2>
+          <div id="agentTracePanel" class="mt-4 space-y-3 text-sm text-slate-600">
+            <p>The planner, guardrail, and tool steps will appear here after each response.</p>
+          </div>
+        </div>
+
         <div id="mentorAssignCard" class="hidden rounded-[26px] bg-white p-5 shadow-ambient/30">
           <h2 class="text-lg font-bold text-nmitInk">Assign Mentor</h2>
           <p class="mt-1 text-sm text-slate-600">Visible for faculty and admin users.</p>
@@ -204,6 +212,7 @@
     const chatMessages = document.getElementById("chatMessages");
     const chipsContainer = document.getElementById("chips");
     const promptPanel = document.getElementById("promptPanel");
+    const agentTracePanel = document.getElementById("agentTracePanel");
     const profilePanel = document.getElementById("profilePanel");
     const contactPanel = document.getElementById("contactPanel");
     const overviewStudents = document.getElementById("overviewStudents");
@@ -342,6 +351,24 @@
       });
     }
 
+    function renderAgentTrace(trace) {
+      if (!trace || !trace.length) {
+        agentTracePanel.innerHTML = "<p>No agent steps recorded yet.</p>";
+        return;
+      }
+
+      agentTracePanel.innerHTML = trace.map((step) => `
+        <div class="rounded-2xl bg-slate-100 p-4">
+          <div class="flex items-center justify-between gap-3">
+            <p class="font-semibold text-nmitInk">${escapeHtml(step.agent)}</p>
+            <span class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600">${escapeHtml(step.status)}</span>
+          </div>
+          <p class="mt-2 text-xs uppercase tracking-[0.16em] text-slate-500">${escapeHtml(step.action)}</p>
+          <p class="mt-2 text-sm text-slate-600">${escapeHtml(step.detail)}</p>
+        </div>
+      `).join("");
+    }
+
     async function loadContext() {
       const userId = userIdInput.value.trim();
       updateRoleBadge();
@@ -390,6 +417,7 @@
           const data = await res.json();
           appendMessage(data.answer || "No response returned.");
           if (data.user_context) renderContext(data.user_context);
+          renderAgentTrace(data.agent_trace || []);
         } else {
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
@@ -454,6 +482,7 @@
     buildPrompts();
     updateRoleBadge();
     loadContext();
+    renderAgentTrace([]);
   </script>
 </body>
 </html>

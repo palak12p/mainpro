@@ -14,8 +14,9 @@ from groq import Groq
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from agentic_workflow import run_agentic_workflow
 from classifier import classify_query
-from data_retriever import assign_mentor, get_user_context, retrieve_data
+from data_retriever import assign_mentor, get_user_context
 from rbac import detect_role
 from response_formatter import (
     create_excel,
@@ -85,18 +86,6 @@ async def ask_groq(system_prompt: str, user_prompt: str, model: str) -> str:
     return await asyncio.to_thread(_chat_sync, system_prompt, user_prompt, model)
 
 
-def _compact_retrieval_payload(retrieved: dict) -> dict:
-    records = retrieved.get("records", [])
-    sample_records = records[:12]
-    return {
-        "intent": retrieved.get("intent"),
-        "entity": retrieved.get("entity"),
-        "summary": retrieved.get("summary", {}),
-        "record_count": len(records),
-        "sample_records": sample_records,
-    }
-
-
 def _cleanup_temp_file(path: Path) -> None:
     path.unlink(missing_ok=True)
 
@@ -157,68 +146,29 @@ async def mentor_assignment(payload: MentorAssignmentRequest):
 @app.post("/ask")
 async def ask(payload: AskRequest):
     try:
-        role = detect_role(payload.user_id)
-        classification = await classify_query(payload.query)
-        logger.info("Classification result: %s", json.dumps(classification))
-
-        query_type = classification.get("query_type", "general_query")
-        intent = classification.get("intent", "general")
-        entity = classification.get("entity", "general")
-
-        if query_type == "organizational_query":
-            retrieved = retrieve_data(
-                data_path=str(DATA_PATH),
-                intent=intent,
-                entity=entity,
-                role=role,
-                user_id=payload.user_id,
-                assignments_path=str(MENTOR_ASSIGNMENTS_PATH),
-            )
-            compact_payload = _compact_retrieval_payload(retrieved)
-            system_prompt = (
-                "You are Moodle AI Assistant for NMIT. "
-                "Use the provided academic dataset and role context to answer clearly. "
-                "When the user is a student, prefer a privacy-safe, student-specific answer. "
-                "When the user is faculty or admin, include actionable administrative detail. "
-                "If the query concerns mentors, class teachers, or contact details, present them cleanly. "
-                "Use the structured summary first and only use sample records when needed. "
-                "Do not mention missing raw data. "
-                "Use a short WhatsApp-style tone when the user asks for chat/contact information."
-            )
-            user_prompt = (
-                f"User role: {role}\n"
-                f"User id: {payload.user_id}\n"
-                f"Original query: {payload.query}\n"
-                f"Classification: {classification}\n"
-                f"Compact retrieval payload: {json.dumps(compact_payload)}\n"
-                "Generate a clean natural language response."
-            )
-            answer = await ask_groq(system_prompt, user_prompt, "llama-3.3-70b-versatile")
-        else:
-            system_prompt = (
-                "You are a helpful educational assistant. "
-                "Answer in a clean, easy-to-read format."
-            )
-            user_prompt = f"User role: {role}\nQuestion: {payload.query}"
-            answer = await ask_groq(system_prompt, user_prompt, "llama-3.3-70b-versatile")
+        result = await run_agentic_workflow(
+            user_id=payload.user_id,
+            query=payload.query,
+            data_path=str(DATA_PATH),
+            assignments_path=str(MENTOR_ASSIGNMENTS_PATH),
+            classify_query=classify_query,
+            ask_groq=ask_groq,
+        )
+        logger.info("Agent trace: %s", json.dumps(result.trace))
 
         if payload.format == "text":
             return JSONResponse(
                 {
-                    "answer": format_text_response(answer),
-                    "role": role,
-                    "classification": classification,
-                    "user_context": get_user_context(
-                        data_path=str(DATA_PATH),
-                        user_id=payload.user_id,
-                        role=role,
-                        assignments_path=str(MENTOR_ASSIGNMENTS_PATH),
-                    ),
+                    "answer": format_text_response(result.answer),
+                    "role": result.role,
+                    "classification": result.classification,
+                    "user_context": result.user_context,
+                    "agent_trace": result.trace,
                 }
             )
 
         if payload.format == "txt":
-            file_path = create_text_file(answer)
+            file_path = create_text_file(result.answer)
             return _build_download_response(
                 file_path=file_path,
                 media_type="text/plain; charset=utf-8",
@@ -226,7 +176,7 @@ async def ask(payload: AskRequest):
             )
 
         if payload.format == "pdf":
-            file_path = create_pdf(answer)
+            file_path = create_pdf(result.answer)
             return _build_download_response(
                 file_path=file_path,
                 media_type="application/pdf",
@@ -234,7 +184,7 @@ async def ask(payload: AskRequest):
             )
 
         if payload.format == "excel":
-            file_path = create_excel(answer)
+            file_path = create_excel(result.answer)
             return _build_download_response(
                 file_path=file_path,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -242,7 +192,7 @@ async def ask(payload: AskRequest):
             )
 
         if payload.format == "word":
-            file_path = create_word(answer)
+            file_path = create_word(result.answer)
             return _build_download_response(
                 file_path=file_path,
                 media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
